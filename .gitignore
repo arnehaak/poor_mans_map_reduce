@@ -1,0 +1,15 @@
+# Ignore CMake build artifacts
+/build/
+
+# Ignore LaTeX build artifacts
+/doc/pmmr.aux
+/doc/pmmr.dvi
+/doc/pmmr.log
+/doc/pmmr.out
+/doc/pmmr.toc
+/doc/pmmr.pdf
+/doc/pmmr.synctex.gz
+/doc/pmmr-plantuml.latex
+/doc/pmmr-plantuml.txt
+
+/00__NOT-TO-BE-CHECKED-IN/

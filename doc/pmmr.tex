@@ -1,0 +1,516 @@
+% !TeX document-id = {d54a6c1c-7b56-418c-9a0d-0fbbfbe92d17}
+% !TeX TXS-program:compile = txs:///lualatex/[--shell-escape]
+% !TEX encoding = UTF-8 Unicode
+
+\documentclass[a4paper]{scrartcl}
+
+\usepackage{polyglossia}
+\setdefaultlanguage{english}
+
+\title{PMMR -- Poor Man's Map Reduce}
+\author{Arne Haak}
+
+% Pretty-printed source code
+\usepackage[cache=false]{minted}
+
+% UML diagrams
+\usepackage{plantuml}
+
+% Big O Notation (Landau symbol)
+\newcommand{\bigo}[1]{\ensuremath{\mathcal{O}\left(#1\right)}} 
+
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+...
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Environment Setup}
+
+Language used: C++17. No 3rd party dependencies for the main library. \mintinline{text}{catch2} is used for unit testing (included, no manual installation required).
+
+\subsection{Building}
+
+\subsubsection{Prerequisites}
+Requires a C++ compiler which is capable of C++17, CMake 3.13 or newer, and some essential build tools (e.g., on Debian: \mintinline{text}{apt install build-essential cmake}).
+This documentation can be built with LuaLaTex.
+
+Tested with GCC 8.3.0 (Debian 10) and MSVC 2017 (Windows 8).
+
+\subsubsection{How to Build}
+Building on Linux:
+\begin{minted}{text}
+git clone https://github.com/arnehaak/taskman.git
+cd taskman
+mkdir build
+cd build
+cmake ..
+make
+\end{minted}
+
+On Windows with Visual Studio, instead of using \mintinline{text}{make} in the last step, \mintinline{text}{nmake} can be used, or the whole project can be opened interactively in the Visual Studio IDE.
+
+\subsection{Executing}
+
+\subsubsection{Tests}
+Some very basic unit tests are included. These tests are not complete; they shall just demonstrate the testing concept and could be extended for real-world usage.
+
+\mintinline{text}{taskman.test.cpp} contains tests for the task manager classes.
+
+\mintinline{text}{policy.test.cpp} contains tests for policies.
+
+In order to launch the included tests, execute \mintinline{text}{example/libtaskman_example} or\\ \mintinline{text}{libtaskman_example.exe}, respectively.
+
+\subsubsection{Demo Application}
+A small demo application is provided. This application demonstrates the behavior of the 3 task manager classes.
+
+In order to launch the demo application, execute \mintinline{text}{test/libtaskman_test} or\\ \mintinline{text}{libtaskman_test.exe}, respectively.
+
+\section{Design/Architecture}
+
+\subsection{Overview}
+The task manager functionality is provided by a library (\mintinline{text}{libtaskman}) that can be used in applications.
+The main API is the \mintinline{cpp}{taskman::TaskManIface} interface.
+
+\subsection{Basic Class Hierarchy}
+
+\begin{plantuml}
+@startuml
+hide circle
+skinparam classAttributeIconSize 0
+skinparam minClassWidth 50
+
+abstract  class TaskManIface {
++ add(process : Process) : void
++ list() : vector<ProcessDisplayInfo>
++ kill() : void
++ killPrio() : void
++ killAll() : void
+}
+
+TaskMan -up-|> TaskManIface
+
+TaskManFIFO -up-|> TaskMan
+TaskManPrio -up-|> TaskMan
+
+TaskMan -right-> PolicyBlocking
+TaskManFIFO -right-> PolicyFIFO
+TaskManPrio -right-> PolicyPrio
+@enduml
+\end{plantuml}
+
+Class \mintinline{cpp}{taskman::TaskMan} models the default behavior of the task manager and implements the interface \mintinline{cpp}{taskman::TaskManIface}.
+
+Classes \mintinline{cpp}{taskman::TaskManFIFO} and \mintinline{cpp}{taskman::TaskManPrio} implement the behaviors specified in part 2 and 3 of the exercise.
+
+The only difference between these 3 classes is their policy, implemented in classes \mintinline{cpp}{taskman::PolicyBlocking}, \mintinline{cpp}{taskman::PolicyFIFO}, and \mintinline{cpp}{taskman::PolicyPrio}.
+
+\begin{minted}{cpp}
+class TaskManIface
+{
+  public:
+    virtual void add(os::Process const & process) = 0;
+
+    virtual std::vector<ProcessDisplayInfo> list(SortBy sortBy) const = 0;
+
+    virtual void kill(os::Process::PID pid)       = 0;
+    virtual void killPrio(os::Process::Prio prio) = 0;
+    virtual void killAll()                        = 0;
+};
+\end{minted}
+
+
+\subsection{Data Structures}
+Choice of data structures explained:
+
+\subsubsection{Main Task Manager Class}
+A hash map (\mintinline{cpp}{std::unordered_map<PID, ProcessManagementData>}) was chosen as the main data structure to store all the processes in class \mintinline{cpp}{taskman::TaskManPrio}.
+This enables process lookup in \bigo{1}, so that methods \mintinline{cpp}{add()} and \mintinline{cpp}{kill()} can have a runtime complexity of \bigo{1} (depending on the underlying policy).
+
+\subsubsection{Policy: Blocking Behavior}
+No data structure needed in \mintinline{cpp}{taskman::PolicyBlocking}.
+
+\subsubsection{Policy: FIFO Behavior}
+A doubly-linked list (\mintinline{cpp}{std::list<PID>}) is the main data structure in \mintinline{cpp}{taskman::PolicyFIFO}, as this allows removing elements from the front (PID of the oldest process) and adding elements to the back (PID of the newest process) in \bigo{1}.
+
+There is also \mintinline{cpp}{std::queue} which is a queue with FIFO semantics, which might seem more ideal at first glance, but it does not allow deletion of elements in between, e.g., when deleting a single process or all processes with a certain priority.
+
+\subsubsection{Policy: Priority Behavior}
+A custom min-heap data structure (see file \mintinline{cpp}{heap.hpp}) is used in \mintinline{cpp}{taskman::PolicyPrio} to always have the information about the lowest priority process available.
+The PID of the process with the lowest priority can be looked up in \bigo{1}. Information about new processes can be added in \bigo{\mathrm{log}(n)}., where $n$ is the number of processes tracked by the policy/task manager.
+
+There is also \mintinline{cpp}{std::priority_queue}, which might seem more ideal at first glance, but it does not allow deletion of elements in between, e.g., when deleting a single process or all processes with a certain priority.
+
+\subsection{Concurrency}
+In order to achieve thread safety, the public methods of \mintinline{cpp}{taskman::TaskMan} are protected via a reader/writer lock. Method \mintinline{cpp}{list()} requires only a shared lock, while all other public methods (which modify the internal state) require an exclusive lock. \mintinline{cpp}{std::shared_mutex} with \mintinline{cpp}{std::unique_lock} and \mintinline{cpp}{std::shared_lock}) are used in the implementation.
+
+
+\subsection{Other Design Choices}
+
+The functionality of the \mintinline{cpp}{list()} method wasn't specified in detail, weather it should print the list itself, or output a structure that can be printed.
+I decided to implement the latter, because I don't think printing functionality (or any other UI functionality) should be part of the task manager.
+This also enables testing of the task manager functionality.
+
+
+% \section{Analysis}
+% \subsection{Runtime Complexity}
+
+
+
+\section{Testing}
+Some unit tests are available in the \mintinline{text}{test} directory.
+As testing was not the main focus of the exercise, there are only very few rudimentary tests of.
+
+
+\mintinline{text}{taskman.test.cpp} contains tests for the task manager classes.
+
+\mintinline{text}{policy.test.cpp} contains tests for the policies.
+
+\mintinline{text}{test_sample_generator.hpp} contains a test sample generator.
+
+
+\section{Demo Application}
+A small application that demonstrates the functionality of the \mintinline{text}{taskman} library is available in the \mintinline{text}{example} directory.
+
+\subsubsection{Output with taskman::TaskMan (Default Blocking Policy)}
+
+Output of the demo application:
+\begin{minted}{text}
+class taskman::TaskMan
+Attempting to add process (13916  HIGH  2020-07-19 01:10:59)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+
+
+Attempting to add process (28308  LOW  2020-07-19 01:17:31)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+
+
+Attempting to add process (6552  LOW  2020-07-19 02:27:51)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+
+
+Attempting to add process (39395  MID  2020-07-19 04:42:39)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+
+
+Attempting to add process (40467  LOW  2020-07-19 08:36:31)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Attempting to add process (39234  HIGH  2020-07-19 15:09:26)...
+AddingProcFailed: capacity exhausted
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Attempting to add process (52202  MID  2020-07-19 23:11:43)...
+AddingProcFailed: capacity exhausted
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Attempting to add process (3697  LOW  2020-07-20 00:43:49)...
+AddingProcFailed: capacity exhausted
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Sorted by PID:
+  6552  LOW   2020-07-19 02:27:51
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Sorted by priority:
+ 40467  LOW   2020-07-19 08:36:31
+  6552  LOW   2020-07-19 02:27:51
+ 28308  LOW   2020-07-19 01:17:31
+ 39395  MID   2020-07-19 04:42:39
+ 13916  HIGH  2020-07-19 01:10:59
+
+
+Sorted by creation time:
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Killing all MID priority processes...
+Killing process with PID 39395
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Killing all processes...
+Killing process with PID 40467
+Killing process with PID 6552
+Killing process with PID 13916
+Killing process with PID 28308
+Resulting processes (sorted by creation time):
+\end{minted}
+
+
+\subsubsection{Output with taskman::TaskManFIFO (FIFO Policy)}
+
+Output of the demo application:
+\begin{minted}{text}
+class taskman::TaskManFIFO
+Attempting to add process (13916  HIGH  2020-07-19 01:10:59)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+
+
+Attempting to add process (28308  LOW  2020-07-19 01:17:31)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+
+
+Attempting to add process (6552  LOW  2020-07-19 02:27:51)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+
+
+Attempting to add process (39395  MID  2020-07-19 04:42:39)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+
+
+Attempting to add process (40467  LOW  2020-07-19 08:36:31)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Attempting to add process (39234  HIGH  2020-07-19 15:09:26)...
+Killing process with PID 13916
+Resulting processes (sorted by creation time):
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+
+
+Attempting to add process (52202  MID  2020-07-19 23:11:43)...
+Killing process with PID 28308
+Resulting processes (sorted by creation time):
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+ 52202  MID   2020-07-19 23:11:43
+
+
+Attempting to add process (3697  LOW  2020-07-20 00:43:49)...
+Killing process with PID 6552
+Resulting processes (sorted by creation time):
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+ 52202  MID   2020-07-19 23:11:43
+  3697  LOW   2020-07-20 00:43:49
+
+
+Sorted by PID:
+  3697  LOW   2020-07-20 00:43:49
+ 39234  HIGH  2020-07-19 15:09:26
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 52202  MID   2020-07-19 23:11:43
+
+
+Sorted by priority:
+  3697  LOW   2020-07-20 00:43:49
+ 40467  LOW   2020-07-19 08:36:31
+ 52202  MID   2020-07-19 23:11:43
+ 39395  MID   2020-07-19 04:42:39
+ 39234  HIGH  2020-07-19 15:09:26
+
+
+Sorted by creation time:
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+ 52202  MID   2020-07-19 23:11:43
+  3697  LOW   2020-07-20 00:43:49
+
+
+Killing all MID priority processes...
+Killing process with PID 52202
+Killing process with PID 39395
+Resulting processes (sorted by creation time):
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+  3697  LOW   2020-07-20 00:43:49
+
+
+Killing all processes...
+Killing process with PID 3697
+Killing process with PID 39234
+Killing process with PID 40467
+Resulting processes (sorted by creation time):
+\end{minted}
+
+
+\subsubsection{Output with taskman::TaskManPrio (Priority Policy)}
+
+Output of the demo application:
+\begin{minted}{text}
+class taskman::TaskManPrio
+Attempting to add process (13916  HIGH  2020-07-19 01:10:59)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+
+
+Attempting to add process (28308  LOW  2020-07-19 01:17:31)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+
+
+Attempting to add process (6552  LOW  2020-07-19 02:27:51)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+
+
+Attempting to add process (39395  MID  2020-07-19 04:42:39)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+
+
+Attempting to add process (40467  LOW  2020-07-19 08:36:31)...
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 28308  LOW   2020-07-19 01:17:31
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+
+
+Attempting to add process (39234  HIGH  2020-07-19 15:09:26)...
+Killing process with PID 28308
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+  6552  LOW   2020-07-19 02:27:51
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+
+
+Attempting to add process (52202  MID  2020-07-19 23:11:43)...
+Killing process with PID 6552
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+ 52202  MID   2020-07-19 23:11:43
+
+
+Attempting to add process (3697  LOW  2020-07-20 00:43:49)...
+AddingProcFailed: capacity exhausted
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+ 52202  MID   2020-07-19 23:11:43
+
+
+Sorted by PID:
+ 13916  HIGH  2020-07-19 01:10:59
+ 39234  HIGH  2020-07-19 15:09:26
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 52202  MID   2020-07-19 23:11:43
+
+
+Sorted by priority:
+ 40467  LOW   2020-07-19 08:36:31
+ 52202  MID   2020-07-19 23:11:43
+ 39395  MID   2020-07-19 04:42:39
+ 39234  HIGH  2020-07-19 15:09:26
+ 13916  HIGH  2020-07-19 01:10:59
+
+
+Sorted by creation time:
+ 13916  HIGH  2020-07-19 01:10:59
+ 39395  MID   2020-07-19 04:42:39
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+ 52202  MID   2020-07-19 23:11:43
+
+
+Killing all MID priority processes...
+Killing process with PID 52202
+Killing process with PID 39395
+Resulting processes (sorted by creation time):
+ 13916  HIGH  2020-07-19 01:10:59
+ 40467  LOW   2020-07-19 08:36:31
+ 39234  HIGH  2020-07-19 15:09:26
+
+
+Killing all processes...
+Killing process with PID 39234
+Killing process with PID 40467
+Killing process with PID 13916
+Resulting processes (sorted by creation time):
+\end{minted}
+
+
+
+\end{document}
