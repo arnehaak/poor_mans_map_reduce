@@ -1,5 +1,5 @@
 # PMMR
-Poor Man's Map Reduce - a small-scale, easy to use framework for Map Reduce algorithm experimentation and small-scale application.
+Poor Man's Map Reduce - an easy to use framework for Map Reduce algorithm experimentation and small-scale application.
 
 |                  | Established Map Reduce Frameworks (Hadoop, etc.) | PMMR                                                               |
 | ---------------- |:------------------------------------------------:|:------------------------------------------------------------------:|
